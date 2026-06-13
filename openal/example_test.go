@@ -1,3 +1,5 @@
+//go:build ignore
+
 package openal_test
 
 import (

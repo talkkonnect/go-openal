@@ -24,13 +24,24 @@ package openal
 //#include "local.h"
 /*
 ALCdevice *walcOpenDevice(const char *devicename) {
+	if (devicename != NULL && devicename[0] == '\0') {
+		return alcOpenDevice(NULL);
+	}
 	return alcOpenDevice(devicename);
 }
-const ALCchar *alcGetString( ALCdevice *device, ALCenum param );
+const ALCchar *walcGetString(ALCdevice *device, ALCenum param) {
+	return alcGetString(device, param);
+}
+ALCboolean walcIsExtensionPresent(ALCdevice *device, const ALCchar *extname) {
+	return alcIsExtensionPresent(device, extname);
+}
 void walcGetIntegerv(ALCdevice *device, ALCenum param, ALCsizei size, void *data) {
 	alcGetIntegerv(device, param, size, data);
 }
 ALCdevice *walcCaptureOpenDevice(const char *devicename, ALCuint frequency, ALCenum format, ALCsizei buffersize) {
+	if (devicename != NULL && devicename[0] == '\0') {
+		return alcCaptureOpenDevice(NULL, frequency, format, buffersize);
+	}
 	return alcCaptureOpenDevice(devicename, frequency, format, buffersize);
 }
 ALCint walcGetInteger(ALCdevice *device, ALCenum param) {
@@ -76,6 +87,13 @@ const (
 	CaptureSamples                = 0x312
 )
 
+const ExtensionEnumerateAll = "ALC_ENUMERATE_ALL_EXT"
+
+const (
+	AllDevicesSpecifier        = 0x1013
+	DefaultAllDevicesSpecifier = 0x1014
+)
+
 type Device struct {
 	handle *C.ALCdevice
 }
@@ -106,12 +124,47 @@ func (self *Device) Err() error {
 }
 
 func OpenDevice(name string) *Device {
-	// TODO: turn empty string into nil?
-	// TODO: what about an error return?
-	p := C.CString(name)
+	p := cStringOrEmpty(name)
 	h := C.walcOpenDevice(p)
-	C.free(unsafe.Pointer(p))
+	freeCString(p, name)
 	return &Device{h}
+}
+
+// OpenDeviceChecked opens a playback device and validates the handle.
+func OpenDeviceChecked(name string) (*Device, error) {
+	device := OpenDevice(name)
+	if err := device.Valid(); err != nil {
+		return nil, err
+	}
+	return device, nil
+}
+
+// GetDeviceString returns an OpenAL device property string.
+// Pass device=nil to query global enumerations.
+func GetDeviceString(device *Device, param uint32) string {
+	var handle *C.ALCdevice
+	if device != nil {
+		handle = device.handle
+	}
+	s := C.walcGetString(handle, C.ALCenum(param))
+	if s == nil {
+		return ""
+	}
+	return C.GoString(s)
+}
+
+// IsALCExtensionPresent reports whether an OpenAL ALC extension is available.
+func IsALCExtensionPresent(ext string) bool {
+	p := C.CString(ext)
+	defer C.free(unsafe.Pointer(p))
+	return C.walcIsExtensionPresent(nil, p) != 0
+}
+
+func (self *Device) Valid() error {
+	if self == nil || self.handle == nil {
+		return ErrInvalidDevice
+	}
+	return self.Err()
 }
 
 func (self *Device) CloseDevice() bool {
@@ -141,13 +194,32 @@ type CaptureDevice struct {
 }
 
 func CaptureOpenDevice(name string, freq uint32, format Format, size uint32) *CaptureDevice {
-//suvir comment: this function gives some error like server not found for JACK 
-	// TODO: turn empty string into nil?
-	// TODO: what about an error return?
-	p := C.CString(name)
+	p := cStringOrEmpty(name)
 	h := C.walcCaptureOpenDevice(p, C.ALCuint(freq), C.ALCenum(format), C.ALCsizei(size))
-	C.free(unsafe.Pointer(p))
+	freeCString(p, name)
 	return &CaptureDevice{Device{h}, uint32(format.SampleSize())}
+}
+
+// CaptureOpenDeviceChecked opens a capture device and validates the handle.
+func CaptureOpenDeviceChecked(name string, freq uint32, format Format, size uint32) (*CaptureDevice, error) {
+	device := CaptureOpenDevice(name, freq, format, size)
+	if err := device.Valid(); err != nil {
+		return nil, err
+	}
+	return device, nil
+}
+
+func cStringOrEmpty(name string) *C.char {
+	if name == "" {
+		return (*C.char)(unsafe.Pointer(nil))
+	}
+	return C.CString(name)
+}
+
+func freeCString(p *C.char, name string) {
+	if name != "" {
+		C.free(unsafe.Pointer(p))
+	}
 }
 
 // XXX: Override Device.CloseDevice to make sure the correct
